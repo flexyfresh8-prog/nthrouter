@@ -1,0 +1,58 @@
+name: iOS ipa
+
+# Builds the unsigned NthRouter .ipa (arm64, iPad-only) on GitHub's runners —
+# the same steps as ios/README.md's manual build, so the artifact is produced
+# ON GitHub, not just pushed from a local machine.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-ipa:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install cross toolchain (clang + lld + Pillow)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang lld python3-pil
+
+      - name: Fetch iPhoneOS 16.5 SDK (theos/sdks, sparse)
+        # blob:none + sparse checkout pulls only this SDK's files, not the
+        # whole multi-GB sdks repo.
+        run: |
+          git clone --depth 1 --filter=blob:none --sparse https://github.com/theos/sdks.git /tmp/sdks
+          git -C /tmp/sdks sparse-checkout set iPhoneOS16.5.sdk
+          test -d /tmp/sdks/iPhoneOS16.5.sdk/usr/include
+          echo "sdk ok: $(du -sh /tmp/sdks/iPhoneOS16.5.sdk | cut -f1)"
+
+      - name: Build SPA (vite)
+        run: |
+          npm ci
+          npm run build
+          test -f dist/index.html
+
+      - name: Pack unsigned .ipa (arm64, iPad-only)
+        # build_ipa.py auto-discovers the apt clang/lld; NTH_SDK points it at
+        # the sparse-checked SDK. The + lines in its log show what was used.
+        env:
+          NTH_SDK: /tmp/sdks/iPhoneOS16.5.sdk
+        run: python3 ios/build_ipa.py
+
+      - name: Upload .ipa artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: NthRouter-unsigned-ipa
+          path: download/NthRouter-unsigned.ipa
+          if-no-files-found: error

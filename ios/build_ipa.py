@@ -30,18 +30,73 @@ REPO = os.path.dirname(HERE)                      # nthrouter/
 WWW_SRC = os.path.join(REPO, "dist")              # vite output
 MAIN_M = os.path.join(HERE, "shell", "main.m")
 
-CLANG = "/tmp/ios-root/usr/lib/llvm-19/bin/clang"
-LD64 = "/tmp/ios-root/usr/lib/llvm-19/bin/ld64.lld"
-RESOURCE = "/tmp/ios-root/usr/lib/llvm-19/lib/clang/19/include"
-DEFAULT_SDK = "/tmp/sdkdl/sdks-master/iPhoneOS16.5.sdk"
-LD_LIBRARY_PATH = "/tmp/ios-root/usr/lib/x86_64-linux-gnu:/tmp/ios-root/usr/lib/llvm-19/lib"
+
+def _find_toolchain():
+    """Locate clang/ld64.lld/resource-dir wherever this runs.
+
+    Order (first hit wins): NTH_CLANG/NTH_LD64 env overrides, the sandbox
+    layout (/tmp/ios-root — the binaries this build was proven with), then
+    PATH (GitHub runners install clang via apt). ld64.lld on Debian/Ubuntu
+    lands in /usr/bin/ld64.lld or /usr/lib/llvm-*/bin/ld64.lld.
+    """
+    import glob as _g
+    from shutil import which
+
+    def first(candidates):
+        for c in candidates:
+            if c and os.path.isfile(c):
+                return c
+        return None
+
+    clang = first([
+        os.environ.get("NTH_CLANG"),
+        "/tmp/ios-root/usr/lib/llvm-19/bin/clang",
+        which("clang-19") or which("clang"),
+    ])
+    ld64 = first([
+        os.environ.get("NTH_LD64"),
+        "/tmp/ios-root/usr/lib/llvm-19/bin/ld64.lld",
+        which("ld64.lld"),
+        (_g.glob("/usr/lib/llvm-*/bin/ld64.lld") + [None])[0],
+    ])
+    if not clang:
+        sys.exit("error: no clang found — set NTH_CLANG or install clang")
+    if not ld64:
+        sys.exit("error: no ld64.lld found — set NTH_LD64 or install lld")
+
+    # Resource dir (clang's built-in headers): NTH_RESOURCE wins, else the
+    # sandbox path, else `clang -print-resource-dir` — correct for any
+    # distro clang; headers live at <rdir>/include, so append that when it
+    # exists (passing the bare rdir as -isystem finds nothing).
+    resource = os.environ.get("NTH_RESOURCE")
+    if not resource:
+        sandbox_inc = "/tmp/ios-root/usr/lib/llvm-19/lib/clang/19/include"
+        if os.path.isdir(sandbox_inc):
+            resource = sandbox_inc
+        else:
+            rdir = subprocess.run(
+                [clang, "-print-resource-dir"],
+                capture_output=True, text=True, check=True,
+            ).stdout.strip()
+            if os.path.isdir(os.path.join(rdir, "include")):
+                resource = os.path.join(rdir, "include")
+            else:
+                resource = rdir
+    return clang, ld64, resource
+
+
+CLANG, LD64, RESOURCE = _find_toolchain()
+DEFAULT_SDK = os.environ.get("NTH_SDK") or "/tmp/sdkdl/sdks-master/iPhoneOS16.5.sdk"
+LD_LIBRARY_PATH = os.environ.get("NTH_LD_LIBRARY_PATH") or "/tmp/ios-root/usr/lib/x86_64-linux-gnu:/tmp/ios-root/usr/lib/llvm-19/lib"
 
 BUNDLE_ID = "com.nthrouter.app"
 DISPLAY_NAME = "NthRouter"
 EXEC_NAME = "NthRouter"
-VERSION = "1.2.0"
-BUILD = "3"
-MIN_IOS = "13.0"
+VERSION = "1.2.1"
+BUILD = "4"
+# iOS 14: the UILaunchScreen plist key (the iPad letterbox fix) requires it.
+# Everything below 14 gets the old behavior, which was the broken screenshot.
+MIN_IOS = "14.0"
 
 
 def run(cmd, **kw):
@@ -104,10 +159,11 @@ def make_info_plist() -> dict:
         "CFBundlePackageType": "APPL",
         "CFBundleShortVersionString": VERSION,
         "CFBundleVersion": BUILD,
-        # TARGETED_DEVICE_FAMILY: 1 = iPhone, 2 = iPad. Both — the SPA's
-        # layout rails switch on width, not idiom, so it works across the
-        # whole iPad multitasking width range either way.
-        "TARGETED_DEVICE_FAMILY": "1,2",
+        # TARGETED_DEVICE_FAMILY: 2 = iPad ONLY (this build is iPad-focused;
+        # iPhone installs are rejected by App Installs — the SPA's layout
+        # rails switch on width, not idiom, so Split View / Stage Manager
+        # windows of any size all render correctly).
+        "TARGETED_DEVICE_FAMILY": "2",
         "LSRequiresIPhoneOS": True,
         "MinimumOSVersion": MIN_IOS,
         "UIApplicationExitOnSuspend": False,
