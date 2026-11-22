@@ -1,5 +1,10 @@
 /**
  * NthRouter iOS shell — a thin WKWebView around the bundled SPA.
+ * Tuned for iPad first: full safe-area pinning (Split View / Stage Manager),
+ * on-screen keyboard avoidance (keyboardLayoutGuide, with a notification
+ * fallback for iPadOS 13/14), interactive drag-to-dismiss keyboard,
+ * native back/forward swipe navigation, and all four iPad orientations
+ * including portrait-upsidedown.
  *
  * Design notes:
  *  - The SPA is copied into the app bundle as "www/". We serve index.html via
@@ -87,6 +92,9 @@ static NSString *const kHost = @"nthrouter";
 
 @interface WebVC : UIViewController <WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler>
 @property (strong, nonatomic) WKWebView *web;
+// Keyboard avoidance: on iOS 15+ a single constraint against keyboardLayoutGuide;
+// on iPadOS 13/14 a bottom constraint we animate from keyboard notifications.
+@property (strong, nonatomic) NSLayoutConstraint *bottomToKeyboard;
 @end
 
 @implementation WebVC
@@ -98,19 +106,86 @@ static NSString *const kHost = @"nthrouter";
     [config setURLSchemeHandler:[[AppSchemeHandler alloc] init] forURLScheme:kScheme];
     config.preferences.javaScriptEnabled = YES;
     config.defaultWebpagePreferences.preferredContentMode = WKContentModeRecommended;
-    config.applicationNameForUserAgent = @"NthRouter-iOS/1.0";
+    config.applicationNameForUserAgent = @"NthRouter-iOS/1.1";
 
     WKUserContentController *u = config.userContentController;
     [u addScriptMessageHandler:self name:@"nth"];
 
     self.web = [[WKWebView alloc] initWithFrame:self.view.bounds configuration:config];
-    self.web.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    self.web.translatesAutoresizingMaskIntoConstraints = NO;
     self.web.navigationDelegate = self;
     self.web.UIDelegate = self;
+
+    // iPad niceties:
+    // The SPA handles its own safe areas (viewport-fit=cover + env()), so stop
+    // the scroll view from double-padding them.
+    self.web.scrollView.contentInsetAdjustmentBehavior = UIScrollViewContentInsetAdjustmentNever;
+    // Drag inside the page to dismiss the keyboard (Safari-style), so the chat
+    // input never traps the viewport.
+    self.web.scrollView.keyboardDismissMode = UIScrollViewKeyboardDismissModeInteractive;
     self.web.scrollView.bounces = NO;
+    if (@available(iOS 13.4, *)) {
+        // Pencil/trackpad scrolling over the page.
+        self.web.scrollView.panGestureRecognizer.allowedScrollTypesMask = UIScrollTypeMaskAll;
+    }
+    // Edge-swipe back/forward through in-app history, like Safari on iPad.
+    self.web.allowsBackForwardNavigationGestures = YES;
+    // No bounce also means no pull-to-refresh hijacking the chat scroll.
+    if (@available(iOS 16.4, *)) {
+        self.web.inspectable = NO;
+    }
+
     [self.view addSubview:self.web];
+    [NSLayoutConstraint activateConstraints:@[
+        [self.web.topAnchor constraintEqualToAnchor:self.view.topAnchor],
+        [self.web.leftAnchor constraintEqualToAnchor:self.view.leftAnchor],
+        [self.web.rightAnchor constraintEqualToAnchor:self.view.rightAnchor],
+    ]];
+
+    if (@available(iOS 15.0, *)) {
+        // One constraint handles both keyboard shown (rises with the keyboard)
+        // and hidden (parks at the view bottom) — Split View and Stage Manager safe.
+        [self.web.bottomAnchor constraintEqualToAnchor:self.view.keyboardLayoutGuide.bottomAnchor].active = YES;
+    } else {
+        // iPadOS 13/14: bottom pinned to the view, nudged up by keyboard frames.
+        self.bottomToKeyboard = [self.web.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor];
+        self.bottomToKeyboard.active = YES;
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(kbWillChangeFrame:)
+                                                     name:UIKeyboardWillChangeFrameNotification
+                                                   object:nil];
+    }
 
     [self.web loadRequest:[NSURLRequest requestWithURL:[NSURL URLWithString:[NSString stringWithFormat:@"%@://%@/", kScheme, kHost]]]];
+}
+
+- (void)kbWillChangeFrame:(NSNotification *)note {
+    CGRect kb = [note.userInfo[UIKeyboardFrameEndUserInfoKey] CGRectValue];
+    // Keyboard frames are in window coordinates; intersect with this view to
+    // get the actual overlap (correct in Split View, where the app window is
+    // only part of the screen).
+    CGRect frameInWindow = [self.view convertRect:self.view.bounds toView:nil];
+    CGRect overlap = CGRectIntersection(kb, frameInWindow);
+    CGFloat inset = CGRectIsNull(overlap) ? 0 : CGRectGetHeight(overlap);
+
+    // Only shift when the keyboard actually covers us; animate alongside the
+    // keyboard's own curve so the chat input bar tracks it exactly.
+    UIViewAnimationCurve curve = UIViewAnimationCurveEaseInOut;
+    NSNumber *curveNum = note.userInfo[UIKeyboardAnimationCurveUserInfoKey];
+    if (curveNum) curve = (UIViewAnimationCurve)[curveNum integerValue];
+    NSNumber *durNum = note.userInfo[UIKeyboardAnimationDurationUserInfoKey];
+    NSTimeInterval dur = durNum ? [durNum doubleValue] : 0.25;
+    [UIView animateWithDuration:((NSInteger)curve << 16) ? dur : dur
+                          delay:0
+                        options:(7 << 16) | UIViewAnimationOptionBeginFromCurrentState
+                     animations:^{
+        self.bottomToKeyboard.constant = -inset;
+        [self.view layoutIfNeeded];
+    } completion:nil];
+}
+
+- (void)dealloc {
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
 }
 
 - (void)viewWillAppear:(BOOL)animated {
@@ -168,7 +243,13 @@ static NSString *const kHost = @"nthrouter";
 - (BOOL)application:(UIApplication *)application didFinishLaunchingWithOptions:(NSDictionary *)launchOptions {
     self.window = [[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
     WebVC *vc = [WebVC new];
-    self.window.rootViewController = vc;
+
+    // Navigation controller so edge-swipe back/forward (iPad trackpad and
+    // finger) has a real stack to work with, and the webview survives pushes.
+    UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:vc];
+    nav.navigationBarHidden = YES;
+
+    self.window.rootViewController = nav;
     [self.window makeKeyAndVisible];
     return YES;
 }

@@ -38,8 +38,8 @@ LD_LIBRARY_PATH = "/tmp/ios-root/usr/lib/x86_64-linux-gnu:/tmp/ios-root/usr/lib/
 BUNDLE_ID = "com.nthrouter.app"
 DISPLAY_NAME = "NthRouter"
 EXEC_NAME = "NthRouter"
-VERSION = "1.0.0"
-BUILD = "1"
+VERSION = "1.1.0"
+BUILD = "2"
 MIN_IOS = "13.0"
 
 
@@ -49,14 +49,33 @@ def run(cmd, **kw):
     return subprocess.run(cmd, check=True, env=env, **kw)
 
 
+PLATFORM_SHIM = os.path.join(HERE, "shell", "platform_shim.s")
+BUILD_DIR = os.path.join(HERE, "build")
+
+
 def compile_and_link(sdk: str, out: str):
-    """arm64-apple-ios compile + link of the shell."""
+    """arm64-apple-ios compile + link of the shell.
+
+    The shim provides ___isPlatformVersionAtLeast, which clang emits calls to
+    for @available() checks but which this theos SDK's libdyld tbd lacks; the
+    real one returns whether the runtime platform >= the requested version.
+    """
+    os.makedirs(BUILD_DIR, exist_ok=True)
+    shim_o = os.path.join(BUILD_DIR, "platform_shim.o")
+    run([
+        CLANG,
+        "-target", f"arm64-apple-ios{MIN_IOS}",
+        "-isysroot", sdk,
+        "-c", PLATFORM_SHIM,
+        "-o", shim_o,
+    ])
     run([
         CLANG,
         "-target", f"arm64-apple-ios{MIN_IOS}",
         "-isysroot", sdk,
         "-isystem", RESOURCE,
         "-x", "objective-c", MAIN_M,
+        "-x", "none", shim_o,
         "-fobjc-arc",
         "-O2",
         "-fvisibility=hidden",
@@ -67,6 +86,7 @@ def compile_and_link(sdk: str, out: str):
         "-framework", "Foundation",
         "-framework", "CoreFoundation",
         "-framework", "CoreServices",
+        "-framework", "CoreGraphics",
         "-framework", "MobileCoreServices",
         "-o", out,
     ])
@@ -83,20 +103,38 @@ def make_info_plist() -> dict:
         "CFBundlePackageType": "APPL",
         "CFBundleShortVersionString": VERSION,
         "CFBundleVersion": BUILD,
+        # TARGETED_DEVICE_FAMILY: 1 = iPhone, 2 = iPad. Both — the SPA's
+        # layout rails switch on width, not idiom, so it works across the
+        # whole iPad multitasking width range either way.
+        "TARGETED_DEVICE_FAMILY": "1,2",
         "LSRequiresIPhoneOS": True,
         "MinimumOSVersion": MIN_IOS,
         "UIApplicationExitOnSuspend": False,
         "UIApplicationSupportsIndirectInputEvents": True,
-        "UIRequiredDeviceCapabilities": ["armv7", "arm64"],
+        "UIRequiredDeviceCapabilities": ["arm64"],
+        # iPad-first: support Split View / Slide Over / Stage Manager side-by-side.
         "UIRequiresFullScreen": False,
+        # iPhone-style portrait only adds upside-down on iPad; all four
+        # orientations are supported (and expected) on iPad.
         "UISupportedInterfaceOrientations": [
             "UIInterfaceOrientationPortrait",
+            "UIInterfaceOrientationPortraitUpsideDown",
+            "UIInterfaceOrientationLandscapeLeft",
+            "UIInterfaceOrientationLandscapeRight",
+        ],
+        "UISupportedInterfaceOrientations~ipad": [
+            "UIInterfaceOrientationPortrait",
+            "UIInterfaceOrientationPortraitUpsideDown",
             "UIInterfaceOrientationLandscapeLeft",
             "UIInterfaceOrientationLandscapeRight",
         ],
         "UIStatusBarStyle": "UIStatusBarStyleDefault",
         "UIViewControllerBasedStatusBarAppearance": True,
         "UIRequiresPersistentWiFi": False,
+        # iPad hardware keyboard + on-screen keyboard; the shell handles both.
+        "UIPrefersShowingKeyboardBackground": False,
+        # Thin multitasking windows resize the app; we adapt continuously.
+        "UISupportsTrueScreenSizeOnIPad": True,
         "CFBundleIcons": {
             "CFBundlePrimaryIcon": {
                 "CFBundleIconFiles": [
