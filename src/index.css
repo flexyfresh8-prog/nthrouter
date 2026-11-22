@@ -1,0 +1,239 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Newsreader:ital,opsz,wght@0,6..72,300..700;1,6..72,300..600&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 40 30% 96.5%;
+    --foreground: 30 10% 14%;
+    --card: 40 34% 98.6%;
+    --card-foreground: 30 10% 14%;
+    --popover: 40 34% 98.6%;
+    --popover-foreground: 30 10% 14%;
+    --primary: 16 52% 46%;
+    --primary-foreground: 40 40% 97%;
+    --secondary: 38 22% 92%;
+    --secondary-foreground: 30 10% 18%;
+    --muted: 38 20% 93%;
+    --muted-foreground: 30 7% 42%;
+    --accent: 34 32% 91%;
+    --accent-foreground: 30 10% 16%;
+    --destructive: 0 60% 46%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 36 16% 87%;
+    --input: 36 16% 87%;
+    --ring: 16 52% 46%;
+    --radius: 0.9rem;
+    --chart-1: 16 52% 46%;
+    --chart-2: 32 38% 58%;
+    --chart-3: 44 40% 62%;
+    --chart-4: 200 18% 45%;
+    --chart-5: 12 30% 40%;
+    --font-heading: 'Newsreader', Georgia, 'Times New Roman', serif;
+    --font-body: 'Inter', ui-sans-serif, system-ui, sans-serif;
+    --font-display: 'Newsreader', Georgia, serif;
+    --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  }
+
+  .dark {
+    --background: 30 6% 9%;
+    --foreground: 40 18% 91%;
+    --card: 30 5% 12%;
+    --card-foreground: 40 18% 91%;
+    --popover: 30 5% 12%;
+    --popover-foreground: 40 18% 91%;
+    --primary: 18 58% 55%;
+    --primary-foreground: 30 10% 10%;
+    --secondary: 30 5% 17%;
+    --secondary-foreground: 40 18% 91%;
+    --muted: 30 5% 16%;
+    --muted-foreground: 36 8% 62%;
+    --accent: 30 5% 18%;
+    --accent-foreground: 40 18% 91%;
+    --destructive: 0 55% 45%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 30 5% 20%;
+    --input: 30 5% 20%;
+    --ring: 18 58% 55%;
+    --chart-1: 18 58% 55%;
+    --chart-2: 32 38% 58%;
+    --chart-3: 44 40% 62%;
+    --chart-4: 200 18% 55%;
+    --chart-5: 12 30% 55%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+    scrollbar-gutter: stable;
+  }
+
+  body {
+    @apply bg-background text-foreground font-body antialiased;
+  }
+
+  h1,
+  h2,
+  h3 {
+    @apply font-heading;
+    letter-spacing: -0.015em;
+  }
+
+  ::selection {
+    background: hsl(var(--primary) / 0.18);
+  }
+}
+
+@layer utilities {
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+  .pb-safe {
+    padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 0.5rem);
+  }
+
+  /* ─────────────────────── Animation system ─────────────────────── */
+  /* Everything is springy and calm: short distances, soft easing.     */
+  /* prefers-reduced-motion collapses each to a simple opacity fade.   */
+
+  .anim-rise {
+    animation: anim-rise 0.55s cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+  @keyframes anim-rise {
+    from { opacity: 0; transform: translateY(14px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  .anim-fade {
+    animation: anim-fade 0.4s ease-out both;
+  }
+  @keyframes anim-fade {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+
+  .anim-pop {
+    animation: anim-pop 0.34s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+  }
+  @keyframes anim-pop {
+    0% { opacity: 0; transform: scale(0.92); }
+    100% { opacity: 1; transform: scale(1); }
+  }
+
+  .anim-slide-left {
+    animation: anim-slide-left 0.42s cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+  @keyframes anim-slide-left {
+    from { opacity: 0; transform: translateX(22px); }
+    to { opacity: 1; transform: translateX(0); }
+  }
+
+  .anim-slide-up {
+    animation: anim-slide-up 0.42s cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+  @keyframes anim-slide-up {
+    from { opacity: 0; transform: translateY(100%); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  .anim-stagger > * {
+    animation: anim-rise 0.5s cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+  .anim-stagger > *:nth-child(1) { animation-delay: 0.04s; }
+  .anim-stagger > *:nth-child(2) { animation-delay: 0.10s; }
+  .anim-stagger > *:nth-child(3) { animation-delay: 0.16s; }
+  .anim-stagger > *:nth-child(4) { animation-delay: 0.22s; }
+  .anim-stagger > *:nth-child(5) { animation-delay: 0.28s; }
+  .anim-stagger > *:nth-child(6) { animation-delay: 0.34s; }
+  .anim-stagger > *:nth-child(n+7) { animation-delay: 0.40s; }
+
+  /* Signature "inking" word: the boot title writes itself in. */
+  .anim-ink {
+    background: linear-gradient(90deg, hsl(var(--primary)) 0%, hsl(var(--primary)) 35%, transparent 35%, transparent 100%);
+    background-size: 300% 100%;
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    animation: anim-ink 1.5s cubic-bezier(0.65, 0, 0.35, 1) forwards;
+  }
+  @keyframes anim-ink {
+    from { background-position: 100% 0; }
+    to { background-position: 0 0; }
+  }
+
+  /* The orbiting dots used while the assistant thinks. */
+  .anim-orbit {
+    animation: anim-orbit 1.8s linear infinite;
+  }
+  @keyframes anim-orbit {
+    from { transform: rotate(0deg) translateX(7px) rotate(0deg); }
+    to { transform: rotate(360deg) translateX(7px) rotate(-360deg); }
+  }
+
+  /* The rising bar equalizer used for "routing..." states. */
+  .anim-eq > span {
+    animation: anim-eq 1s ease-in-out infinite;
+  }
+  .anim-eq > span:nth-child(2) { animation-delay: 0.15s; }
+  .anim-eq > span:nth-child(3) { animation-delay: 0.3s; }
+  .anim-eq > span:nth-child(4) { animation-delay: 0.45s; }
+  @keyframes anim-eq {
+    0%, 100% { transform: scaleY(0.35); }
+    50% { transform: scaleY(1); }
+  }
+
+  /* Gentle breathing glow for the boot sigil. */
+  .anim-breathe {
+    animation: anim-breathe 2.6s ease-in-out infinite;
+  }
+  @keyframes anim-breathe {
+    0%, 100% { opacity: 0.55; transform: scale(1); }
+    50% { opacity: 1; transform: scale(1.05); }
+  }
+
+  /* Shimmer for skeleton bars. */
+  .anim-shimmer {
+    background: linear-gradient(100deg, hsl(var(--muted)) 40%, hsl(var(--accent)) 50%, hsl(var(--muted)) 60%);
+    background-size: 200% 100%;
+    animation: anim-shimmer 1.4s linear infinite;
+  }
+  @keyframes anim-shimmer {
+    from { background-position: 200% 0; }
+    to { background-position: -200% 0; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .anim-rise,
+    .anim-fade,
+    .anim-pop,
+    .anim-slide-left,
+    .anim-slide-up,
+    .anim-stagger > *,
+    .anim-ink,
+    .anim-orbit,
+    .anim-eq > span,
+    .anim-breathe,
+    .anim-shimmer {
+      animation-duration: 0.01s !important;
+      animation-iteration-count: 1 !important;
+    }
+    .anim-ink {
+      background: none;
+      -webkit-text-fill-color: currentColor;
+    }
+    .anim-shimmer {
+      background: hsl(var(--muted));
+    }
+  }
+}
