@@ -1,4 +1,4 @@
-# iOS build (unsigned .ipa)
+# iOS build (unsigned .ipa) — iPad-first
 
 `ios/build_ipa.py` cross-compiles the NthRouter shell for **arm64-apple-ios** and packs an **unsigned** `.ipa` — entirely on Linux, no Xcode, no macOS, no Apple Developer account needed to produce it.
 
@@ -44,6 +44,18 @@ python3 ios/build_ipa.py          # -> download/NthRouter-unsigned.ipa
 ```
 
 Verified output: arm64 Mach-O `EXEC` (0xfeedfacf / CPU 0x100000c), `Info.plist` parses, `Payload/`-only layout, zip integrity OK, minimum iOS 13.0, 7 icon sizes, `www/` with hashed assets.
+
+## iPad focus
+
+The shell and the plist are tuned for iPad first (the SPA already rails at ≥768px with `viewport-fit=cover`):
+
+- **Multitasking**: `UIRequiresFullScreen=False`, `TARGETED_DEVICE_FAMILY=1,2` — runs side-by-side in Split View / Slide Over / Stage Manager at any window width (the SPA's nav rail/bottom-tabs switch on width, not idiom).
+- **Orientations**: all four, including portrait-upsidedown (base and `~ipad` keys).
+- **Keyboard**: on-screen keyboard avoidance via `keyboardLayoutGuide` (iOS 15+) with a `UIKeyboardWillChangeFrameNotification` fallback for iPadOS 13/14; the fallback intersects the keyboard frame with the view's window frame so the offset is correct in Split View. Drag inside the page dismisses the keyboard (Safari-style, `keyboardDismissMode=interactive`), so chat input never traps the viewport. Hardware keyboards just work.
+- **Navigation**: edge-swipe back/forward through in-app history (`allowsBackForwardNavigationGestures`), like Safari on iPad.
+- **Trackpad / Pencil**: scroll types enabled from iOS 13.4.
+- **Safe areas**: the scroll view no longer double-pads them — the SPA handles them itself (`env(safe-area-inset-*)`).
+- **`ios/shell/platform_shim.s`**: provides `___isPlatformVersionAtLeast`, which clang emits for `@available()` but this theos SDK's libdyld tbd lacks. It compares a packed (major, minor, patch) against the runtime version and returns `>=`.
 
 ## Sideload: it must be signed before iOS will run it
 
