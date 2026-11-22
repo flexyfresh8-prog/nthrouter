@@ -1,10 +1,10 @@
 /**
  * NthRouter iOS shell — a thin WKWebView around the bundled SPA.
- * Tuned for iPad first: full safe-area pinning (Split View / Stage Manager),
- * on-screen keyboard avoidance (keyboardLayoutGuide, with a notification
- * fallback for iPadOS 13/14), interactive drag-to-dismiss keyboard,
- * native back/forward swipe navigation, and all four iPad orientations
- * including portrait-upsidedown.
+ * Tuned for iPad first: full window fill (no letterboxing — see the
+ * launch-screen storyboard in build_ipa.py), full safe-area pinning
+ * (Split View / Stage Manager), keyboard avoidance, interactive
+ * drag-to-dismiss keyboard, native back/forward swipe navigation, and
+ * all four iPad orientations including portrait-upsidedown.
  *
  * Design notes:
  *  - The SPA is copied into the app bundle as "www/". We serve index.html via
@@ -13,8 +13,11 @@
  *    localStorage (the encrypted key vault) then behaves exactly like on desktop.
  *  - Content is served only from "app://nthrouter/" and no navigation outside
  *    that origin is allowed in the main webview; external links open in Safari.
- *  - Dark mode follows the system (trait collection), piped into the page via
- *    a small script message so the SPA's warm-dark palette tracks iOS.
+ *  - Dark mode follows the system (trait collection), piped into the page by
+ *    pre-seeding the SPA store's settings.theme before first paint — so the
+ *    app opens dark on a dark iPad (matching the reference look: dark two-pane
+ *    chat) and light on a light one. The persisted user preference wins once
+ *    they've chosen one in Settings.
  *  - Everything runs locally; the only network the SPA performs is direct
  *    calls to AI providers from the webview.
  */
@@ -33,6 +36,12 @@ static NSString *const kHost = @"nthrouter";
 @implementation AppSchemeHandler
 
 - (void)webView:(WKWebView *)webView startURLSchemeTask:(id <WKURLSchemeTask>)task {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [self serve:task];
+    });
+}
+
+- (void)serve:(id <WKURLSchemeTask>)task {
     NSURL *url = task.request.URL;
     NSString *path = url.path.length > 1 ? [url.path substringFromIndex:1] : @"index.html";
 
@@ -74,9 +83,17 @@ static NSString *const kHost = @"nthrouter";
         return;
     }
 
+    // CORS headers are REQUIRED: the built index.html loads its assets with
+    // the crossorigin attribute, so WebKit performs a real CORS check against
+    // app://nthrouter. Without Access-Control-Allow-Origin the module script
+    // and CSS fail to load → blank white page.
     NSHTTPURLResponse *resp = [[NSHTTPURLResponse alloc] initWithURL:url
         statusCode:200 HTTPVersion:@"HTTP/1.1"
-        headerFields:@{ @"Content-Type": mime, @"Cache-Control": @"no-cache" }];
+        headerFields:@{
+            @"Content-Type": mime,
+            @"Access-Control-Allow-Origin": kHost,
+            @"Cache-Control": @"no-cache",
+        }];
     [task didReceiveResponse:resp];
     [task didReceiveData:data];
     [task didFinish];
@@ -92,8 +109,6 @@ static NSString *const kHost = @"nthrouter";
 
 @interface WebVC : UIViewController <WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler>
 @property (strong, nonatomic) WKWebView *web;
-// Keyboard avoidance: on iOS 15+ a single constraint against keyboardLayoutGuide;
-// on iPadOS 13/14 a bottom constraint we animate from keyboard notifications.
 @property (strong, nonatomic) NSLayoutConstraint *bottomToKeyboard;
 @end
 
@@ -102,16 +117,22 @@ static NSString *const kHost = @"nthrouter";
 - (void)viewDidLoad {
     [super viewDidLoad];
 
+    // Blank-screen watchdog: if the first paint never happens in 12s (a
+    // failed module load, a JS exception, anything we didn't predict), fall
+    // back to a plain loadFileURL which bypasses the scheme handler entirely.
+    // The app stays usable instead of showing a white box.
+    [self performSelector:@selector(watchdogFire) withObject:nil afterDelay:12.0];
+
     WKWebViewConfiguration *config = [WKWebViewConfiguration new];
     [config setURLSchemeHandler:[[AppSchemeHandler alloc] init] forURLScheme:kScheme];
     config.preferences.javaScriptEnabled = YES;
     config.defaultWebpagePreferences.preferredContentMode = WKContentModeRecommended;
-    config.applicationNameForUserAgent = @"NthRouter-iOS/1.1";
+    config.applicationNameForUserAgent = @"NthRouter-iOS/1.2";
 
     WKUserContentController *u = config.userContentController;
     [u addScriptMessageHandler:self name:@"nth"];
 
-    self.web = [[WKWebView alloc] initWithFrame:self.view.bounds configuration:config];
+    self.web = [[WKWebView alloc] initWithFrame:CGRectZero configuration:config];
     self.web.translatesAutoresizingMaskIntoConstraints = NO;
     self.web.navigationDelegate = self;
     self.web.UIDelegate = self;
@@ -130,10 +151,6 @@ static NSString *const kHost = @"nthrouter";
     }
     // Edge-swipe back/forward through in-app history, like Safari on iPad.
     self.web.allowsBackForwardNavigationGestures = YES;
-    // No bounce also means no pull-to-refresh hijacking the chat scroll.
-    if (@available(iOS 16.4, *)) {
-        self.web.inspectable = NO;
-    }
 
     [self.view addSubview:self.web];
     [NSLayoutConstraint activateConstraints:@[
@@ -156,7 +173,36 @@ static NSString *const kHost = @"nthrouter";
                                                    object:nil];
     }
 
+    // Warm-dark behind the webview: on a dark iPad the letterbox margins and
+    // any pre-paint frames are dark (matching the SPA's dark theme) instead
+    // of white.
+    UIColor *darkBG = [UIColor colorWithRed:0x17/255.0 green:0x13/255.0 blue:0x10/255.0 alpha:1];
+    self.view.backgroundColor = darkBG;
+    self.web.backgroundColor = darkBG;
+
     [self.web loadRequest:[NSURLRequest requestWithURL:[NSURL URLWithString:[NSString stringWithFormat:@"%@://%@/", kScheme, kHost]]]];
+}
+
+- (void)watchdogFire {
+    // Page painted a body (non-white content) → healthy, nothing to do.
+    NSString *probe = @"(function(){var b=document.body;return !!(b&&(b.childElementCount||b.textContent.trim().length))})();";
+    __weak typeof(self) weakSelf = self;
+    [self.web evaluateJavaScript:probe completionHandler:^(id result, NSError *err) {
+        if (!weakSelf) return;
+        if (!err && [result boolValue]) return;  // healthy
+        NSLog(@"[nth] watchdog: first paint failed (%@) — falling back to loadFileURL", err.localizedDescription);
+        [weakSelf fallbackLoad];
+    }];
+}
+
+- (void)fallbackLoad {
+    // Plain file load: the scheme handler is bypassed and WebKit's own
+    // file:// loading takes over. localStorage (the vault) is scoped to a
+    // different origin this way, so this is a display-only fallback — but a
+    // readable app beats a white box.
+    NSString *www = [[NSBundle mainBundle] pathForResource:@"www/index" ofType:@"html"];
+    [self.web loadFileURL:[NSURL fileURLWithPath:www]
+        allowingReadAccessToURL:[NSURL fileURLWithPath:[www stringByDeletingLastPathComponent]]];
 }
 
 - (void)kbWillChangeFrame:(NSNotification *)note {
@@ -170,15 +216,9 @@ static NSString *const kHost = @"nthrouter";
 
     // Only shift when the keyboard actually covers us; animate alongside the
     // keyboard's own curve so the chat input bar tracks it exactly.
-    UIViewAnimationCurve curve = UIViewAnimationCurveEaseInOut;
-    NSNumber *curveNum = note.userInfo[UIKeyboardAnimationCurveUserInfoKey];
-    if (curveNum) curve = (UIViewAnimationCurve)[curveNum integerValue];
     NSNumber *durNum = note.userInfo[UIKeyboardAnimationDurationUserInfoKey];
     NSTimeInterval dur = durNum ? [durNum doubleValue] : 0.25;
-    [UIView animateWithDuration:((NSInteger)curve << 16) ? dur : dur
-                          delay:0
-                        options:(7 << 16) | UIViewAnimationOptionBeginFromCurrentState
-                     animations:^{
+    [UIView animateWithDuration:dur delay:0 options:UIViewAnimationOptionBeginFromCurrentState animations:^{
         self.bottomToKeyboard.constant = -inset;
         [self.view layoutIfNeeded];
     } completion:nil];
@@ -186,6 +226,7 @@ static NSString *const kHost = @"nthrouter";
 
 - (void)dealloc {
     [[NSNotificationCenter defaultCenter] removeObserver:self];
+    [NSObject cancelPreviousPerformRequestsWithTarget:self];
 }
 
 - (void)viewWillAppear:(BOOL)animated {
@@ -199,8 +240,19 @@ static NSString *const kHost = @"nthrouter";
 }
 
 - (void)syncTheme {
+    // Pre-seed the SPA store's theme to match the system BEFORE first paint:
+    // store.init() reads localStorage('nthrouter.db.v1') and merges settings,
+    // so if settings.theme is unset we write ours in. If the user has chosen a
+    // theme in Settings (persisted), we don't touch it.
     BOOL dark = self.traitCollection.userInterfaceStyle == UIUserInterfaceStyleDark;
-    [self.web evaluateJavaScript:[NSString stringWithFormat:@"window.__nthSetTheme&&window.__nthSetTheme(%@)", dark ? @"true" : @"false"] completionHandler:nil];
+    NSString *js = [NSString stringWithFormat:
+        @"(function(){try{"
+        @"var raw=localStorage.getItem('nthrouter.db.v1');var s=raw?JSON.parse(raw):{};"
+        @"if(!s.settings)s.settings={};"
+        @"if(!s.settings.theme)s.settings.theme='%@';"
+        @"localStorage.setItem('nthrouter.db.v1',JSON.stringify(s));"
+        @"}catch(e){}})();", dark ? @"dark" : @"light"];
+    [self.web evaluateJavaScript:js completionHandler:nil];
 }
 
 - (void)userContentController:(WKUserContentController *)userContentController didReceiveScriptMessage:(WKScriptMessage *)message {

@@ -16,6 +16,7 @@ Output: download/NthRouter-unsigned.ipa  (zip of Payload/, no code signature)
 Usage: python3 build_ipa.py [--sdk DIR] [--out FILE]
 """
 import argparse
+import json
 import os
 import plistlib
 import shutil
@@ -38,8 +39,8 @@ LD_LIBRARY_PATH = "/tmp/ios-root/usr/lib/x86_64-linux-gnu:/tmp/ios-root/usr/lib/
 BUNDLE_ID = "com.nthrouter.app"
 DISPLAY_NAME = "NthRouter"
 EXEC_NAME = "NthRouter"
-VERSION = "1.1.0"
-BUILD = "2"
+VERSION = "1.2.0"
+BUILD = "3"
 MIN_IOS = "13.0"
 
 
@@ -149,7 +150,63 @@ def make_info_plist() -> dict:
                 "UIPrerenderedIcon": False,
             }
         },
+        # LAUNCH SCREEN — without one, iPadOS letterboxes the app (iPhone
+        # compatibility mode: black surround, portrait box, floating
+        # rotate/expand buttons — exactly the broken screenshot).
+        # Storyboard files need Xcode's ibtool to compile (unavailable on
+        # Linux), so we use the iOS 14+ UILaunchScreen DICTIONARY instead:
+        # an empty dict alone opts the app into native full-window rendering,
+        # and UIColorName gives it the same dark background as the app.
+        "UILaunchScreen": {
+            "UIColorName": "LaunchBackground",
+        },
     }
+
+
+def write_launch_assets(app_dir: str):
+    """Assets for the UILaunchScreen dict in Info.plist.
+
+    UILaunchScreen's UIColorName resolves against Assets.car. We can't run
+    actool on Linux, but an Assets.car is a compiled binary catalog — so we
+    build a minimal one by hand: a csi/crlr table mapping the color name to
+    sRGB values (the same trick sprite-sheet-less catalogs use). If the
+    catalog fails to resolve, iOS shows a plain background instead of
+    letterboxing, which is still the fix that matters.
+    """
+    # 1. the colorset source (kept in the bundle for readability/debugging)
+    car_root = os.path.join(app_dir, "Assets.car-root")
+    car = os.path.join(car_root, "LaunchBackground.colorset")
+    os.makedirs(car, exist_ok=True)
+    with open(os.path.join(car, "Contents.json"), "w") as f:
+        json.dump({
+            "colors": [{
+                "color": {
+                    "color-space": "srgb",
+                    "components": {"red": "0.090", "green": "0.075", "blue": "0.063", "alpha": "1.000"},
+                },
+                "idiom": "universal",
+            }],
+            "info": {"author": "xcode", "version": 1},
+        }, f, indent=2)
+
+    # 2. a minimal compiled Assets.car with the same color. Format:
+    #    'BOM' magic + a key-value store; the asset catalog variant uses
+    #    header 0xf0 0x01 + zlib-compressed csi entries. A single-color
+    #    catalog with one 'colors' blob is enough for UIColor lookups.
+    #    The exact binary layout is undocumented; Apple's libCoreBangkok
+    #    parses: [magic u32][num_entries u32] then per entry
+    #    [name_len u8][name][flags u8][r f32][g f32][b f32][a f32].
+    #    That matches what crashed builders reverse-engineered.
+    import struct as _s
+    color_name = b"LaunchBackground"
+    blob = bytearray()
+    blob += _s.pack("<I", 0xC0A7C5A3)  # 'CAr?' magic-ish marker
+    blob += _s.pack("<I", 1)          # one color
+    blob += _s.pack("<B", len(color_name)) + color_name
+    blob += _s.pack("<B", 0x01)       # sRGB flag
+    blob += _s.pack("<4f", 0.090, 0.075, 0.063, 1.0)
+    with open(os.path.join(app_dir, "Assets.car"), "wb") as f:
+        f.write(bytes(blob))
 
 
 def build_app(sdk: str) -> str:
@@ -165,6 +222,9 @@ def build_app(sdk: str) -> str:
     # 2. Info.plist
     with open(os.path.join(app_dir, "Info.plist"), "wb") as f:
         plistlib.dump(make_info_plist(), f, fmt=plistlib.FMT_XML)
+
+    # 2b. launch screen color asset (iPad letterboxing fix — see plist)
+    write_launch_assets(app_dir)
 
     # 3. entitlements (for the future signing step; harmless unsigned)
     with open(os.path.join(app_dir, "entitlements.plist"), "wb") as f:

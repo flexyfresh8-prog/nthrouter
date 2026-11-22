@@ -47,6 +47,36 @@ Verified output: arm64 Mach-O `EXEC` (0xfeedfacf / CPU 0x100000c), `Info.plist` 
 
 ## iPad focus
 
+### v1.2.0 — white-screen fix
+
+Three bugs produced the "blank white portrait box on black" screenshot:
+
+1. **Letterboxing** — the app had no launch screen, so iPadOS ran it in iPhone
+   compatibility mode (portrait box centered in a black surround with floating
+   rotate/expand buttons). Fixed with the iOS 14+ `UILaunchScreen` plist dict
+   (an empty dict alone opts into native full-window rendering; ours adds
+   `UIColorName` for a dark background). Storyboards were NOT used — they need
+   Xcode's `ibtool`, unavailable on Linux. A minimal `Assets.car` is built by
+   hand for the color; if iOS can't resolve it, the fallback background is
+   still full-window (the letterbox is gone either way).
+2. **Blank page** — vite emits `<script crossorigin src=...>` and
+   `<link crossorigin ...>`, so WebKit runs a real CORS check against
+   `app://nthrouter`. The scheme handler returned no CORS headers → the module
+   and CSS failed to load → React never mounted → white page. Fixed: every
+   response now carries `Access-Control-Allow-Origin: nthrouter`. The handler
+   also dispatches to the main queue before responding (WebKit expects the
+   scheme task callbacks to not be reentrant with the request).
+3. **Wrong default look** — the SPA defaults to light, but the reference
+   screenshots show a dark two-pane chat. The shell now pre-seeds the SPA
+   store's `settings.theme` to the system appearance before first paint
+   (persisted user choice always wins afterwards).
+
+Plus a watchdog: if first paint hasn't happened 12s after launch, the shell
+falls back to `loadFileURL` so the app is at least usable (display-only, since
+the vault's localStorage origin differs under file://). The webview's own
+background is set to the SPA's dark background so no white flash precedes paint.
+
+
 The shell and the plist are tuned for iPad first (the SPA already rails at ≥768px with `viewport-fit=cover`):
 
 - **Multitasking**: `UIRequiresFullScreen=False`, `TARGETED_DEVICE_FAMILY=1,2` — runs side-by-side in Split View / Slide Over / Stage Manager at any window width (the SPA's nav rail/bottom-tabs switch on width, not idiom).
